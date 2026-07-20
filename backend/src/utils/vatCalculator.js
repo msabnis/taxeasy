@@ -1,91 +1,111 @@
 /**
- * TaxEase UK — VAT Calculator
- * Handles UK VAT rates: Standard (20%), Reduced (5%), Zero (0%)
+ * TaxEase UK — VAT Calculator Utility
+ *
+ * All monetary values are in PENCE (integers) to avoid floating-point issues.
+ * Divide by 100 when displaying to users.
+ *
+ * UK VAT Rates (2025/26):
+ *   Standard  20%  — most goods & services
+ *   Reduced    5%  — home energy, children's car seats, etc.
+ *   Zero       0%  — food, children's clothes, books, newspapers
+ *   Exempt     —   — financial services, insurance, some property
  */
 
+'use strict';
+
 const VAT_RATES = {
-  STANDARD: 0.20,   // 20% — most goods & services
-  REDUCED: 0.05,    // 5%  — home energy, children's car seats, etc.
-  ZERO: 0.00,       // 0%  — food, children's clothes, books
-  EXEMPT: null      // Exempt — financial services, insurance
+  standard: 0.20,
+  reduced:  0.05,
+  zero:     0.00,
+  exempt:   null,   // No VAT calculation possible
 };
 
 /**
- * Calculate VAT from net (ex-VAT) amount
- * @param {number} netAmount - Amount before VAT
- * @param {string} rateType - 'STANDARD' | 'REDUCED' | 'ZERO'
- * @returns {{ net, vat, gross, rate }}
+ * Add VAT to a net (ex-VAT) amount.
+ * @param {number} netPence  - Net amount in pence
+ * @param {string} rateType  - 'standard' | 'reduced' | 'zero' | 'exempt'
+ * @returns {{ netPence, vatPence, grossPence, rate, rateType }}
  */
-function addVAT(netAmount, rateType = 'STANDARD') {
+function addVAT(netPence, rateType = 'standard') {
+  if (!Number.isInteger(netPence) || netPence < 0) {
+    throw new Error(`netPence must be a non-negative integer, got: ${netPence}`);
+  }
   const rate = VAT_RATES[rateType];
-  if (rate === null) throw new Error('Cannot calculate VAT for exempt supplies');
-  const vat = parseFloat((netAmount * rate).toFixed(2));
-  const gross = parseFloat((netAmount + vat).toFixed(2));
-  return { net: netAmount, vat, gross, rate, rateType };
+  if (rate === undefined) {
+    throw new Error(`Unknown VAT rate type: ${rateType}. Must be standard | reduced | zero | exempt`);
+  }
+  if (rate === null) {
+    throw new Error('Cannot calculate VAT for exempt supplies');
+  }
+  const vatPence   = Math.round(netPence * rate);
+  const grossPence = netPence + vatPence;
+  return { netPence, vatPence, grossPence, rate, rateType };
 }
 
 /**
- * Extract VAT from gross (inc-VAT) amount
- * @param {number} grossAmount - Amount including VAT
- * @param {string} rateType - 'STANDARD' | 'REDUCED' | 'ZERO'
- * @returns {{ net, vat, gross, rate }}
+ * Extract VAT from a gross (inc-VAT) amount.
+ * @param {number} grossPence - Gross amount in pence
+ * @param {string} rateType   - 'standard' | 'reduced' | 'zero' | 'exempt'
+ * @returns {{ netPence, vatPence, grossPence, rate, rateType }}
  */
-function removeVAT(grossAmount, rateType = 'STANDARD') {
+function removeVAT(grossPence, rateType = 'standard') {
+  if (!Number.isInteger(grossPence) || grossPence < 0) {
+    throw new Error(`grossPence must be a non-negative integer, got: ${grossPence}`);
+  }
   const rate = VAT_RATES[rateType];
-  if (rate === null) throw new Error('Cannot calculate VAT for exempt supplies');
-  const net = parseFloat((grossAmount / (1 + rate)).toFixed(2));
-  const vat = parseFloat((grossAmount - net).toFixed(2));
-  return { net, vat, gross: grossAmount, rate, rateType };
+  if (rate === undefined) {
+    throw new Error(`Unknown VAT rate type: ${rateType}`);
+  }
+  if (rate === null) {
+    throw new Error('Cannot calculate VAT for exempt supplies');
+  }
+  const netPence = Math.round(grossPence / (1 + rate));
+  const vatPence = grossPence - netPence;
+  return { netPence, vatPence, grossPence, rate, rateType };
 }
 
 /**
- * Generate HMRC 9-box VAT return from transactions
- * @param {Array} transactions - Array of transaction objects
- * @param {Date} periodStart
- * @param {Date} periodEnd
- * @returns {Object} 9-box VAT return
+ * Determine the VAT rate type from a Shopify tax line.
+ * Shopify stores tax rates as decimals (e.g. 0.2 for 20%).
+ * @param {number} shopifyTaxRate - e.g. 0.2, 0.05, 0
+ * @returns {string} rateType
  */
-function generate9BoxReturn(transactions, periodStart, periodEnd) {
-  const filtered = transactions.filter(t => {
-    const date = new Date(t.date);
-    return date >= periodStart && date <= periodEnd;
-  });
+function rateTypeFromShopify(shopifyTaxRate) {
+  const rate = parseFloat(shopifyTaxRate);
+  if (rate >= 0.20) return 'standard';
+  if (rate >= 0.05) return 'reduced';
+  return 'zero';
+}
 
-  let box1 = 0; // VAT due on sales
-  let box2 = 0; // VAT due on acquisitions from EC (post-Brexit: usually 0)
-  let box4 = 0; // VAT reclaimed on purchases
-  let box6 = 0; // Total value of sales (ex-VAT)
-  let box7 = 0; // Total value of purchases (ex-VAT)
-  let box8 = 0; // Total value of EC supplies (post-Brexit: usually 0)
-  let box9 = 0; // Total value of EC acquisitions (post-Brexit: usually 0)
+/**
+ * Convert a Shopify order to a transaction-ready VAT breakdown.
+ * Shopify stores amounts as decimal strings (e.g. "12.00").
+ * @param {Object} shopifyOrder - Raw Shopify order object
+ * @returns {{ grossPence, netPence, vatPence, rateType, externalId, date, description }}
+ */
+function shopifyOrderToVat(shopifyOrder) {
+  const grossPence = Math.round(parseFloat(shopifyOrder.total_price || 0) * 100);
+  const vatPence   = Math.round(parseFloat(shopifyOrder.total_tax   || 0) * 100);
+  const netPence   = grossPence - vatPence;
 
-  for (const t of filtered) {
-    if (t.type === 'sale') {
-      box1 += t.vatAmount || 0;
-      box6 += t.netAmount || 0;
-    } else if (t.type === 'purchase') {
-      box4 += t.vatAmount || 0;
-      box7 += t.netAmount || 0;
-    }
+  // Determine dominant VAT rate from tax lines
+  let rateType = 'zero';
+  if (shopifyOrder.tax_lines && shopifyOrder.tax_lines.length > 0) {
+    const maxRate = Math.max(...shopifyOrder.tax_lines.map(t => parseFloat(t.rate || 0)));
+    rateType = rateTypeFromShopify(maxRate);
+  } else if (vatPence > 0) {
+    rateType = 'standard';
   }
 
-  const box3 = parseFloat((box1 + box2).toFixed(2));
-  const box5 = parseFloat(Math.abs(box3 - box4).toFixed(2)); // Net VAT payable/reclaimable
-
   return {
-    periodStart: periodStart.toISOString().split('T')[0],
-    periodEnd: periodEnd.toISOString().split('T')[0],
-    box1: parseFloat(box1.toFixed(2)),
-    box2: parseFloat(box2.toFixed(2)),
-    box3,
-    box4: parseFloat(box4.toFixed(2)),
-    box5,
-    box6: parseFloat(box6.toFixed(2)),
-    box7: parseFloat(box7.toFixed(2)),
-    box8: parseFloat(box8.toFixed(2)),
-    box9: parseFloat(box9.toFixed(2)),
-    isPayable: box3 > box4
+    grossPence,
+    netPence,
+    vatPence,
+    rateType,
+    externalId:  String(shopifyOrder.id),
+    date:        (shopifyOrder.created_at || '').split('T')[0],
+    description: `Shopify Order #${shopifyOrder.order_number}`,
   };
 }
 
-module.exports = { VAT_RATES, addVAT, removeVAT, generate9BoxReturn };
+module.exports = { VAT_RATES, addVAT, removeVAT, rateTypeFromShopify, shopifyOrderToVat };
