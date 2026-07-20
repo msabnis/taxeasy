@@ -15,7 +15,7 @@
     "migrate:status": "npx sequelize-cli db:migrate:status",
     "seed": "npx sequelize-cli db:seed:all",
     "seed:undo": "npx sequelize-cli db:seed:undo",
-    "test": "jest --coverage --forceExit --testTimeout=30000",
+    "test": "jest --config jest.config.js --coverage --forceExit --testTimeout=30000",
     "lint": "eslint src/ --ext .js --max-warnings=50"
   },
   "dependencies": {
@@ -45,26 +45,5 @@
     "supertest": "^6.3.3",
     "eslint": "^8.55.0",
     "sequelize-cli": "^6.6.2"
-  },
-  "jest": {
-    "testEnvironment": "node",
-    "testMatch": ["**/src/tests/**/*.test.js"],
-    "coverageDirectory": "coverage",
-    "collectCoverageFrom": [
-      "src/**/*.js",
-      "!src/migrations/**",
-      "!src/seeders/**",
-      "!src/config/**"
-    ],
-    "coverageThreshold": {
-      "global": {
-        "branches": 50,
-        "functions": 50,
-        "lines": 50,
-        "statements": 50
-      }
-    },
-    "testTimeout": 30000,
-    "forceExit": true
   }
 }
