@@ -4,7 +4,7 @@
  * Runs every 15 minutes to pull new orders from all active merchants.
  * Uses node-cron for scheduling.
  *
- * Schedule: */15 * * * * (every 15 minutes)
+ * Schedule: every 15 minutes (cron: star-slash-15 star star star star)
  *
  * To run manually:
  *   node -e "require('./src/jobs/shopifySyncJob').runNow()"
