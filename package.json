@@ -1,0 +1,15 @@
+{
+  "name": "taxease-uk",
+  "version": "1.0.0",
+  "description": "UK Shopify financial app — VAT, Companies House, MTD filing",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently \"npm run dev --prefix backend\" \"npm run dev --prefix frontend\"",
+    "build": "npm run build --prefix frontend",
+    "test": "npm run test --prefix backend",
+    "lint": "npm run lint --prefix backend && npm run lint --prefix frontend"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
