@@ -1,88 +1,234 @@
-const express = require('express');
-const router = express.Router();
-const axios = require('axios');
-const { addVAT } = require('../utils/vatCalculator');
-const logger = require('../utils/logger');
-
 /**
- * GET /api/shopify/orders
- * Fetch orders from Shopify and enrich with VAT data
+ * TaxEase UK — Shopify Routes
+ *
+ * Endpoints for Shopify data access and sync management.
  */
-router.get('/orders', async (req, res) => {
-  const { shop, accessToken, since, limit = 50 } = req.query;
+
+'use strict';
+
+const express  = require('express');
+const router   = express.Router();
+const { Op }   = require('sequelize');
+const { Transaction, Merchant } = require('../models');
+const { syncMerchant }          = require('../services/shopify/shopifySyncService');
+const { createShopifyClient }   = require('../services/shopify/shopifyClient');
+const logger                    = require('../utils/logger');
+
+// ── POST /api/shopify/sync ────────────────────────────────────────────────────
+/**
+ * Manually trigger a Shopify sync for a merchant.
+ * Useful for initial setup and on-demand refresh.
+ */
+router.post('/sync', async (req, res) => {
+  const { merchantId, fullSync, sinceDate, dryRun } = req.body;
+  if (!merchantId) return res.status(400).json({ error: 'merchantId is required' });
+
   try {
-    const response = await axios.get(
-      `https://${shop}/admin/api/2024-01/orders.json`,
-      {
-        params: { status: 'any', limit, created_at_min: since, financial_status: 'paid' },
-        headers: { 'X-Shopify-Access-Token': accessToken }
-      }
-    );
-
-    // Enrich orders with VAT breakdown
-    const enriched = response.data.orders.map(order => {
-      const netAmount = parseFloat(order.subtotal_price);
-      const taxAmount = parseFloat(order.total_tax);
-      const grossAmount = parseFloat(order.total_price);
-      return {
-        id: order.id,
-        orderNumber: order.order_number,
-        createdAt: order.created_at,
-        customer: order.email,
-        netAmount,
-        vatAmount: taxAmount,
-        grossAmount,
-        currency: order.currency,
-        financialStatus: order.financial_status,
-        lineItems: order.line_items?.length || 0
-      };
-    });
-
-    res.json({ orders: enriched, count: enriched.length });
+    logger.info(`Manual sync triggered for merchant ${merchantId}`);
+    const result = await syncMerchant(merchantId, { fullSync, sinceDate, dryRun });
+    res.json({ success: result.errors.length === 0, ...result });
   } catch (err) {
-    logger.error('Shopify orders error:', err.message);
-    res.status(err.response?.status || 500).json({ error: err.message });
+    logger.error('Manual sync error:', err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 
+// ── GET /api/shopify/orders ───────────────────────────────────────────────────
 /**
- * GET /api/shopify/pnl
- * Calculate Profit & Loss from Shopify orders
+ * Fetch orders from Shopify API directly (for preview/debugging).
  */
-router.get('/pnl', async (req, res) => {
-  const { shop, accessToken, from, to } = req.query;
-  try {
-    const response = await axios.get(
-      `https://${shop}/admin/api/2024-01/orders.json`,
-      {
-        params: {
-          status: 'any',
-          financial_status: 'paid',
-          created_at_min: from,
-          created_at_max: to,
-          limit: 250
-        },
-        headers: { 'X-Shopify-Access-Token': accessToken }
-      }
-    );
+router.get('/orders', async (req, res) => {
+  const { merchantId, since, limit = 50 } = req.query;
+  if (!merchantId) return res.status(400).json({ error: 'merchantId is required' });
 
-    const orders = response.data.orders;
-    const revenue = orders.reduce((sum, o) => sum + parseFloat(o.subtotal_price), 0);
-    const totalVat = orders.reduce((sum, o) => sum + parseFloat(o.total_tax), 0);
-    const totalGross = orders.reduce((sum, o) => sum + parseFloat(o.total_price), 0);
-    const refunds = orders.reduce((sum, o) => sum + (o.refunds?.length || 0), 0);
+  try {
+    const merchant = await Merchant.findByPk(merchantId);
+    if (!merchant) return res.status(404).json({ error: 'Merchant not found' });
+
+    const shopify = createShopifyClient(merchant.shopDomain, merchant.accessToken);
+    const { orders } = await shopify.getOrdersPage({
+      created_at_min: since,
+      limit: Math.min(parseInt(limit), 250),
+    });
+
+    res.json({ orders, count: orders.length });
+  } catch (err) {
+    logger.error('Shopify orders fetch error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/shopify/transactions ─────────────────────────────────────────────
+/**
+ * Get ingested transactions for a merchant with filtering.
+ */
+router.get('/transactions', async (req, res) => {
+  const { merchantId, from, to, type, vatRate, page = 1, limit = 50 } = req.query;
+  if (!merchantId) return res.status(400).json({ error: 'merchantId is required' });
+
+  const where = { merchantId, source: 'shopify' };
+  if (from || to) {
+    where.date = {};
+    if (from) where.date[Op.gte] = from;
+    if (to)   where.date[Op.lte] = to;
+  }
+  if (type)    where.type    = type;
+  if (vatRate) where.vatRate = vatRate;
+
+  try {
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+    const { count, rows } = await Transaction.findAndCountAll({
+      where,
+      order:  [['date', 'DESC']],
+      limit:  parseInt(limit),
+      offset,
+      attributes: [
+        'id', 'type', 'externalId', 'date', 'description',
+        'grossAmount', 'netAmount', 'vatAmount', 'vatRate',
+        'currency', 'category', 'isReconciled', 'createdAt',
+      ],
+    });
+
+    // Convert pence to pounds for display
+    const transactions = rows.map(t => ({
+      ...t.toJSON(),
+      grossGBP: (t.grossAmount / 100).toFixed(2),
+      netGBP:   (t.netAmount   / 100).toFixed(2),
+      vatGBP:   (t.vatAmount   / 100).toFixed(2),
+    }));
 
     res.json({
-      period: { from, to },
-      orderCount: orders.length,
-      revenue: parseFloat(revenue.toFixed(2)),
-      vatCollected: parseFloat(totalVat.toFixed(2)),
-      grossRevenue: parseFloat(totalGross.toFixed(2)),
-      refundCount: refunds,
-      currency: 'GBP'
+      transactions,
+      pagination: {
+        total: count,
+        page:  parseInt(page),
+        limit: parseInt(limit),
+        pages: Math.ceil(count / parseInt(limit)),
+      },
     });
   } catch (err) {
-    logger.error('Shopify P&L error:', err.message);
+    logger.error('Transactions fetch error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/shopify/transactions/summary ─────────────────────────────────────
+/**
+ * Get a VAT-rate breakdown summary of transactions for a period.
+ * Useful for the dashboard P&L and VAT overview cards.
+ */
+router.get('/transactions/summary', async (req, res) => {
+  const { merchantId, from, to } = req.query;
+  if (!merchantId || !from || !to) {
+    return res.status(400).json({ error: 'merchantId, from, and to are required' });
+  }
+
+  try {
+    const transactions = await Transaction.findAll({
+      where: {
+        merchantId,
+        source: 'shopify',
+        date:   { [Op.between]: [from, to] },
+      },
+      attributes: ['type', 'vatRate', 'grossAmount', 'netAmount', 'vatAmount'],
+    });
+
+    const summary = {
+      period: { from, to },
+      totals: { grossGBP: '0.00', netGBP: '0.00', vatGBP: '0.00' },
+      byType: {},
+      byVatRate: {},
+      transactionCount: transactions.length,
+    };
+
+    let totalGross = 0, totalNet = 0, totalVat = 0;
+
+    for (const t of transactions) {
+      // By type
+      if (!summary.byType[t.type]) {
+        summary.byType[t.type] = { count: 0, grossGBP: '0.00', vatGBP: '0.00', _gross: 0, _vat: 0 };
+      }
+      summary.byType[t.type].count++;
+      summary.byType[t.type]._gross += t.grossAmount;
+      summary.byType[t.type]._vat   += t.vatAmount;
+
+      // By VAT rate
+      if (!summary.byVatRate[t.vatRate]) {
+        summary.byVatRate[t.vatRate] = { count: 0, netGBP: '0.00', vatGBP: '0.00', _net: 0, _vat: 0 };
+      }
+      summary.byVatRate[t.vatRate].count++;
+      summary.byVatRate[t.vatRate]._net += t.netAmount;
+      summary.byVatRate[t.vatRate]._vat += t.vatAmount;
+
+      // Totals (refunds reduce totals)
+      const sign = t.type === 'refund' ? -1 : 1;
+      totalGross += sign * t.grossAmount;
+      totalNet   += sign * t.netAmount;
+      totalVat   += sign * t.vatAmount;
+    }
+
+    // Format pence → pounds
+    summary.totals.grossGBP = (totalGross / 100).toFixed(2);
+    summary.totals.netGBP   = (totalNet   / 100).toFixed(2);
+    summary.totals.vatGBP   = (totalVat   / 100).toFixed(2);
+
+    for (const type of Object.values(summary.byType)) {
+      type.grossGBP = (type._gross / 100).toFixed(2);
+      type.vatGBP   = (type._vat   / 100).toFixed(2);
+      delete type._gross; delete type._vat;
+    }
+    for (const rate of Object.values(summary.byVatRate)) {
+      rate.netGBP = (rate._net / 100).toFixed(2);
+      rate.vatGBP = (rate._vat / 100).toFixed(2);
+      delete rate._net; delete rate._vat;
+    }
+
+    res.json(summary);
+  } catch (err) {
+    logger.error('Transaction summary error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/shopify/status ───────────────────────────────────────────────────
+/**
+ * Check Shopify connection status for a merchant.
+ */
+router.get('/status', async (req, res) => {
+  const { merchantId } = req.query;
+  if (!merchantId) return res.status(400).json({ error: 'merchantId is required' });
+
+  try {
+    const merchant = await Merchant.findByPk(merchantId);
+    if (!merchant) return res.status(404).json({ error: 'Merchant not found' });
+
+    const hasToken = !!merchant.accessToken;
+    let tokenValid = false;
+    let shopInfo   = null;
+
+    if (hasToken) {
+      const shopify = createShopifyClient(merchant.shopDomain, merchant.accessToken);
+      tokenValid = await shopify.verifyToken();
+      if (tokenValid) {
+        shopInfo = await shopify.getShop();
+      }
+    }
+
+    const txCount = await Transaction.count({
+      where: { merchantId, source: 'shopify' },
+    });
+
+    res.json({
+      connected:    hasToken && tokenValid,
+      shopDomain:   merchant.shopDomain,
+      tokenValid,
+      shopName:     shopInfo?.name,
+      currency:     shopInfo?.currency,
+      timezone:     shopInfo?.iana_timezone,
+      txCount,
+    });
+  } catch (err) {
+    logger.error('Shopify status error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
