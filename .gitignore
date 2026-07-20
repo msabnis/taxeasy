@@ -1,0 +1,53 @@
+# Environment & secrets
+.env
+.env.local
+.env.production
+.env.staging
+*.pem
+*.key
+
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build outputs
+dist/
+build/
+.next/
+out/
+
+# Database
+*.sql.bak
+*.db
+dump.rdb
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Testing
+coverage/
+.nyc_output/
+
+# Railway
+.railway/
+
+# Temporary
+tmp/
+temp/
