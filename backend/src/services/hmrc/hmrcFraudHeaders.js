@@ -128,7 +128,7 @@ function getServerIp() {
         if (addr.family === 'IPv4' && !addr.internal) return addr.address;
       }
     }
-  } catch (_) {}
+  } catch (_) { /* ignore */ }
   return '127.0.0.1';
 }
 
