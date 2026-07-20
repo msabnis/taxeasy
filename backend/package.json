@@ -11,8 +11,11 @@
     "dev": "nodemon src/server.js",
     "migrate": "npx sequelize-cli db:migrate",
     "migrate:undo": "npx sequelize-cli db:migrate:undo",
+    "migrate:undo:all": "npx sequelize-cli db:migrate:undo:all",
+    "migrate:status": "npx sequelize-cli db:migrate:status",
     "seed": "npx sequelize-cli db:seed:all",
-    "test": "jest --coverage",
+    "seed:undo": "npx sequelize-cli db:seed:undo",
+    "test": "jest --coverage --forceExit",
     "lint": "eslint src/ --ext .js"
   },
   "dependencies": {
@@ -42,5 +45,17 @@
     "supertest": "^6.3.3",
     "eslint": "^8.55.0",
     "sequelize-cli": "^6.6.2"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "coverageThreshold": {
+      "global": {
+        "branches": 75,
+        "functions": 75,
+        "lines": 75,
+        "statements": 75
+      }
+    },
+    "testPathIgnorePatterns": ["/node_modules/"]
   }
 }
