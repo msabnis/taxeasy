@@ -1,15 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import {
   Page, Layout, Card, Text, Badge, Button,
-  BlockStack, InlineStack, Box, Divider
+  BlockStack, InlineStack
 } from '@shopify/polaris';
 import axios from 'axios';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
 export default function Dashboard() {
-  const [summary, setSummary] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [_summary, setSummary] = useState(null);
+  const [_loading, setLoading] = useState(true);
 
   useEffect(() => {
     axios.get(`${API_BASE}/api/dashboard/summary`, {
@@ -27,7 +27,6 @@ export default function Dashboard() {
       primaryAction={{ content: 'File VAT Return', url: '/vat' }}
     >
       <Layout>
-        {/* VAT Status */}
         <Layout.Section variant="oneThird">
           <Card>
             <BlockStack gap="300">
@@ -42,7 +41,6 @@ export default function Dashboard() {
           </Card>
         </Layout.Section>
 
-        {/* Companies House */}
         <Layout.Section variant="oneThird">
           <Card>
             <BlockStack gap="300">
@@ -57,12 +55,11 @@ export default function Dashboard() {
           </Card>
         </Layout.Section>
 
-        {/* P&L */}
         <Layout.Section variant="oneThird">
           <Card>
             <BlockStack gap="300">
               <InlineStack align="space-between">
-                <Text variant="headingMd">Profit & Loss</Text>
+                <Text variant="headingMd">Profit &amp; Loss</Text>
                 <Badge>This Month</Badge>
               </InlineStack>
               <Text variant="heading2xl" as="p">£0.00</Text>
@@ -72,12 +69,10 @@ export default function Dashboard() {
           </Card>
         </Layout.Section>
 
-        {/* Quick Actions */}
         <Layout.Section>
           <Card>
             <BlockStack gap="400">
               <Text variant="headingMd">Quick Actions</Text>
-              <Divider />
               <InlineStack gap="300" wrap>
                 <Button url="/vat" variant="primary">📤 Submit VAT Return</Button>
                 <Button url="/companies-house">🏛️ File Annual Accounts</Button>
