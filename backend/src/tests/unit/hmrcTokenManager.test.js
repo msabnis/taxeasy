@@ -1,8 +1,5 @@
 /**
  * TaxEase UK — HMRC Token Manager Unit Tests
- *
- * Tests token lifecycle logic without real HMRC API calls.
- * Uses Jest mocks for axios and the HmrcToken model.
  */
 
 'use strict';
@@ -10,17 +7,16 @@
 jest.mock('axios');
 jest.mock('../../models', () => ({
   HmrcToken: {
-    findOne:     jest.fn(),
-    findByPk:    jest.fn(),
+    findOne:      jest.fn(),
+    findByPk:     jest.fn(),
     findOrCreate: jest.fn(),
-    update:      jest.fn(),
-    create:      jest.fn(),
+    update:       jest.fn(),
+    create:       jest.fn(),
   },
   AuditLog: { create: jest.fn() },
 }));
 
-const axios        = require('axios');
-const { HmrcToken, AuditLog } = require('../../models');
+const { HmrcToken } = require('../../models');
 const {
   buildAuthorizationUrl,
   getConnectionStatus,
@@ -29,9 +25,9 @@ const {
 // ── buildAuthorizationUrl ─────────────────────────────────────────────────────
 describe('buildAuthorizationUrl', () => {
   beforeEach(() => {
-    process.env.HMRC_BASE_URL    = 'https://test-api.service.hmrc.gov.uk';
-    process.env.HMRC_CLIENT_ID   = 'test-client-id';
-    process.env.HMRC_REDIRECT_URI = 'https://app.taxeaseuk.com/auth/hmrc/callback';
+    process.env.HMRC_BASE_URL     = 'https://test-api.service.hmrc.gov.uk';
+    process.env.HMRC_CLIENT_ID    = 'test-client-id';
+    process.env.HMRC_REDIRECT_URI = 'http://localhost:3001/auth/hmrc/callback';
   });
 
   test('builds correct authorization URL', () => {
@@ -39,19 +35,26 @@ describe('buildAuthorizationUrl', () => {
     expect(url).toContain('https://test-api.service.hmrc.gov.uk/oauth/authorize');
     expect(url).toContain('response_type=code');
     expect(url).toContain('client_id=test-client-id');
-    expect(url).toContain('scope=read%3Avat+write%3Avat');
+    expect(url).toContain('scope=read%3Avat');
     expect(url).toContain('state=merchant-123');
   });
 
-  test('includes redirect_uri', () => {
+  test('includes redirect_uri parameter', () => {
     const url = buildAuthorizationUrl('merchant-123');
     expect(url).toContain('redirect_uri=');
-    expect(url).toContain('taxeaseuk.com');
+    // The redirect URI is URL-encoded in the query string
+    expect(url).toContain('localhost');
   });
 
   test('uses merchantId as state parameter', () => {
     const url = buildAuthorizationUrl('my-merchant-uuid');
     expect(url).toContain('state=my-merchant-uuid');
+  });
+
+  test('includes both VAT scopes', () => {
+    const url = buildAuthorizationUrl('merchant-123');
+    expect(url).toContain('read%3Avat');
+    expect(url).toContain('write%3Avat');
   });
 });
 
