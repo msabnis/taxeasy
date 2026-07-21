@@ -2,8 +2,6 @@
  * TaxEase UK — HMRC MTD Service Integration Tests
  *
  * Tests the full MTD pipeline with a real DB but mocked HMRC API.
- * This avoids hitting HMRC's sandbox during CI while still testing
- * the DB interactions, error handling, and business logic.
  */
 
 'use strict';
@@ -11,12 +9,13 @@
 jest.mock('../../services/hmrc/hmrcApiClient');
 jest.mock('../../services/hmrc/hmrcTokenManager');
 
-const { createHmrcClient }   = require('../../services/hmrc/hmrcApiClient');
-const { getValidAccessToken } = require('../../services/hmrc/hmrcTokenManager');
-const hmrcMtdService         = require('../../services/hmrc/hmrcMtdService');
-const { sequelize, Merchant, Transaction, VatReturn, HmrcToken, AuditLog } = require('../../models');
+const { createHmrcClient }    = require('../../services/hmrc/hmrcApiClient');
+const { getValidAccessToken }  = require('../../services/hmrc/hmrcTokenManager');
+const hmrcMtdService           = require('../../services/hmrc/hmrcMtdService');
+const { sequelize, Merchant, Transaction, VatReturn } = require('../../models');
 
-const MERCHANT_ID = 'test-hmrc-merchant-uuid-001';
+// Valid UUIDs required by PostgreSQL UUID column type
+const MERCHANT_ID = 'a1b2c3d4-0001-0001-0001-000000000001';
 const VRN         = 'GB123456789';
 
 // ── Mock HMRC client ──────────────────────────────────────────────────────────
@@ -36,27 +35,41 @@ beforeAll(async () => {
   await sequelize.sync({ force: true });
 
   await Merchant.create({
-    id:          MERCHANT_ID,
-    shopDomain:  'test-hmrc.myshopify.com',
-    plan:        'small_business',
-    planStatus:  'active',
-    vatNumber:   VRN,
-    isActive:    true,
+    id:         MERCHANT_ID,
+    shopDomain: 'test-hmrc.myshopify.com',
+    plan:       'small_business',
+    planStatus: 'active',
+    vatNumber:  VRN,
+    isActive:   true,
   });
 
   // Seed transactions for Q1 2026
   await Transaction.bulkCreate([
     {
-      merchantId: MERCHANT_ID, source: 'shopify', type: 'sale',
-      date: '2026-01-15', description: 'Order #1001',
-      grossAmount: 12000, netAmount: 10000, vatAmount: 2000,
-      vatRate: 'standard', currency: 'GBP', category: 'sales',
+      merchantId:  MERCHANT_ID,
+      source:      'shopify',
+      type:        'sale',
+      date:        '2026-01-15',
+      description: 'Order #1001',
+      grossAmount: 12000,
+      netAmount:   10000,
+      vatAmount:   2000,
+      vatRate:     'standard',
+      currency:    'GBP',
+      category:    'sales',
     },
     {
-      merchantId: MERCHANT_ID, source: 'shopify', type: 'purchase',
-      date: '2026-02-10', description: 'Office supplies',
-      grossAmount: 2400, netAmount: 2000, vatAmount: 400,
-      vatRate: 'standard', currency: 'GBP', category: 'operating_expense',
+      merchantId:  MERCHANT_ID,
+      source:      'shopify',
+      type:        'purchase',
+      date:        '2026-02-10',
+      description: 'Office supplies',
+      grossAmount: 2400,
+      netAmount:   2000,
+      vatAmount:   400,
+      vatRate:     'standard',
+      currency:    'GBP',
+      category:    'operating_expense',
     },
   ]);
 });
@@ -75,13 +88,7 @@ beforeEach(() => {
 describe('syncObligations', () => {
   test('creates draft VatReturn records for open obligations', async () => {
     mockClient.getOpenObligations.mockResolvedValue([
-      {
-        periodKey: '26AA',
-        start:     '2026-01-01',
-        end:       '2026-03-31',
-        due:       '2026-05-07',
-        status:    'O',
-      },
+      { periodKey: '26AA', start: '2026-01-01', end: '2026-03-31', due: '2026-05-07', status: 'O' },
     ]);
 
     const result = await hmrcMtdService.syncObligations(MERCHANT_ID);
@@ -104,18 +111,19 @@ describe('syncObligations', () => {
     await hmrcMtdService.syncObligations(MERCHANT_ID);
     const result2 = await hmrcMtdService.syncObligations(MERCHANT_ID);
 
-    expect(result2.synced).toBe(0);  // Already exists, not created again
+    expect(result2.synced).toBe(0);
 
     const count = await VatReturn.count({ where: { merchantId: MERCHANT_ID, periodKey: '26AA' } });
     expect(count).toBe(1);
   });
 
   test('throws if merchant has no VRN', async () => {
+    const noVrnId = 'a1b2c3d4-0001-0001-0001-000000000099';
     await Merchant.create({
-      id: 'no-vrn-merchant', shopDomain: 'no-vrn.myshopify.com',
+      id: noVrnId, shopDomain: 'no-vrn.myshopify.com',
       plan: 'sole_trader', planStatus: 'active', isActive: true,
     });
-    await expect(hmrcMtdService.syncObligations('no-vrn-merchant')).rejects.toThrow('VAT registration number');
+    await expect(hmrcMtdService.syncObligations(noVrnId)).rejects.toThrow('VAT registration number');
   });
 });
 
@@ -124,7 +132,6 @@ describe('submitReturn', () => {
   let vatReturnId;
 
   beforeEach(async () => {
-    // Prepare a VatReturn record
     const { vatReturn } = await require('../../services/vatEngine').prepareVatReturn(
       MERCHANT_ID, '26BB', '2026-01-01', '2026-03-31', '2026-05-07'
     );
@@ -180,7 +187,7 @@ describe('submitReturn', () => {
   });
 
   test('throws if vatReturnId not found', async () => {
-    await expect(hmrcMtdService.submitReturn(MERCHANT_ID, 'non-existent-id'))
+    await expect(hmrcMtdService.submitReturn(MERCHANT_ID, 'a1b2c3d4-ffff-ffff-ffff-ffffffffffff'))
       .rejects.toThrow('not found');
   });
 });
