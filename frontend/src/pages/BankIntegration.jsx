@@ -1,5 +1,5 @@
 import React from 'react';
-import { Page, Card, Text, BlockStack, Button, Banner, InlineStack } from '@shopify/polaris';
+import { Page, Card, Text, BlockStack, Button } from '@shopify/polaris';
 
 export default function BankIntegration() {
   return (
@@ -23,7 +23,8 @@ export default function BankIntegration() {
           <BlockStack gap="300">
             <Text variant="headingMd">📁 Upload Bank Statement</Text>
             <Text tone="subdued">
-              Upload a CSV or PDF bank statement. We'll parse and categorise your transactions automatically.
+              Upload a CSV or PDF bank statement. We&apos;ll parse and categorise
+              your transactions automatically.
             </Text>
             <Button>Upload Statement</Button>
           </BlockStack>
