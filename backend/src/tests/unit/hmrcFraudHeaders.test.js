@@ -6,7 +6,8 @@
 
 const { buildFraudHeaders, buildServerFraudHeaders } = require('../../services/hmrc/hmrcFraudHeaders');
 
-const REQUIRED_HEADERS = [
+// Headers that must be present and non-empty
+const REQUIRED_NON_EMPTY_HEADERS = [
   'Gov-Client-Connection-Method',
   'Gov-Client-Device-ID',
   'Gov-Client-User-IDs',
@@ -16,14 +17,20 @@ const REQUIRED_HEADERS = [
   'Gov-Client-Public-Port',
   'Gov-Client-Browser-JS-User-Agent',
   'Gov-Client-Browser-Do-Not-Track',
-  'Gov-Client-Browser-Plugins',
   'Gov-Client-Screens',
   'Gov-Client-Window-Size',
   'Gov-Vendor-Version',
-  'Gov-Vendor-License-IDs',
   'Gov-Vendor-Public-IP',
   'Gov-Vendor-Forwarded',
 ];
+
+// Headers that must be present but may be empty string (HMRC allows empty)
+const REQUIRED_POSSIBLY_EMPTY_HEADERS = [
+  'Gov-Client-Browser-Plugins',  // Empty string is valid — no plugins in server context
+  'Gov-Vendor-License-IDs',      // Empty string is valid — no license IDs required
+];
+
+const ALL_REQUIRED_HEADERS = [...REQUIRED_NON_EMPTY_HEADERS, ...REQUIRED_POSSIBLY_EMPTY_HEADERS];
 
 const mockReq = {
   headers: {
@@ -31,7 +38,7 @@ const mockReq = {
     'x-forwarded-for': '1.2.3.4',
     'dnt':             '1',
   },
-  socket:  { remoteAddress: '1.2.3.4', remotePort: 12345 },
+  socket:     { remoteAddress: '1.2.3.4', remotePort: 12345 },
   connection: { remoteAddress: '1.2.3.4' },
   ip: '1.2.3.4',
 };
@@ -39,9 +46,17 @@ const mockReq = {
 describe('buildFraudHeaders', () => {
   test('includes all required HMRC fraud prevention headers', () => {
     const headers = buildFraudHeaders(mockReq, 'merchant-123');
-    for (const header of REQUIRED_HEADERS) {
+    for (const header of ALL_REQUIRED_HEADERS) {
       expect(headers).toHaveProperty(header);
       expect(headers[header]).toBeDefined();
+      // All headers must be strings (some may be empty string)
+      expect(typeof headers[header]).toBe('string');
+    }
+  });
+
+  test('non-empty headers have actual values', () => {
+    const headers = buildFraudHeaders(mockReq, 'merchant-123');
+    for (const header of REQUIRED_NON_EMPTY_HEADERS) {
       expect(headers[header]).not.toBe('');
     }
   });
@@ -82,8 +97,9 @@ describe('buildFraudHeaders', () => {
 describe('buildServerFraudHeaders', () => {
   test('includes all required headers', () => {
     const headers = buildServerFraudHeaders('merchant-123');
-    for (const header of REQUIRED_HEADERS) {
+    for (const header of ALL_REQUIRED_HEADERS) {
       expect(headers).toHaveProperty(header);
+      expect(headers[header]).toBeDefined();
     }
   });
 
