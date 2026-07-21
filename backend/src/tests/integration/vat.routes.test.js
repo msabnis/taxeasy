@@ -2,7 +2,6 @@
  * TaxEase UK — VAT Routes Integration Tests
  *
  * Tests the /api/vat/* endpoints with a real PostgreSQL test database.
- * Requires DATABASE_URL to be set in the test environment.
  */
 
 'use strict';
@@ -11,22 +10,21 @@ const request  = require('supertest');
 const app      = require('../../app');
 const { sequelize, Merchant, Transaction } = require('../../models');
 
-const MERCHANT_ID = 'test-merchant-uuid-vat-001';
+// Valid UUID required by PostgreSQL UUID column type
+const MERCHANT_ID = 'a1b2c3d4-0002-0002-0002-000000000002';
 
 beforeAll(async () => {
   await sequelize.sync({ force: true });
 
-  // Create test merchant
   await Merchant.create({
-    id:          MERCHANT_ID,
-    shopDomain:  'test-vat.myshopify.com',
-    plan:        'small_business',
-    planStatus:  'active',
-    vatNumber:   'GB123456789',
-    isActive:    true,
+    id:         MERCHANT_ID,
+    shopDomain: 'test-vat.myshopify.com',
+    plan:       'small_business',
+    planStatus: 'active',
+    vatNumber:  'GB123456789',
+    isActive:   true,
   });
 
-  // Create test transactions
   await Transaction.bulkCreate([
     {
       merchantId:  MERCHANT_ID,
@@ -95,15 +93,10 @@ describe('POST /api/vat/calculate', () => {
   test('returns correct 9-box for Q1 2026', async () => {
     const res = await request(app)
       .post('/api/vat/calculate')
-      .send({
-        merchantId:  MERCHANT_ID,
-        periodStart: '2026-01-01',
-        periodEnd:   '2026-03-31',
-      });
+      .send({ merchantId: MERCHANT_ID, periodStart: '2026-01-01', periodEnd: '2026-03-31' });
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
-
     // box1: sales VAT (2000 + 1000) - refund VAT (200) = 2800
     expect(res.body.boxes.box1).toBe('28.00');
     // box4: purchase VAT = 400
@@ -123,11 +116,7 @@ describe('POST /api/vat/calculate', () => {
   test('returns zeros for period with no transactions', async () => {
     const res = await request(app)
       .post('/api/vat/calculate')
-      .send({
-        merchantId:  MERCHANT_ID,
-        periodStart: '2025-01-01',
-        periodEnd:   '2025-03-31',
-      });
+      .send({ merchantId: MERCHANT_ID, periodStart: '2025-01-01', periodEnd: '2025-03-31' });
     expect(res.status).toBe(200);
     expect(res.body.boxes.box1).toBe('0.00');
     expect(res.body.boxes.box5).toBe('0.00');
@@ -139,12 +128,7 @@ describe('POST /api/vat/prepare', () => {
   test('creates a VatReturn record with status prepared', async () => {
     const res = await request(app)
       .post('/api/vat/prepare')
-      .send({
-        merchantId:  MERCHANT_ID,
-        periodKey:   '26AA',
-        periodStart: '2026-01-01',
-        periodEnd:   '2026-03-31',
-      });
+      .send({ merchantId: MERCHANT_ID, periodKey: '26AA', periodStart: '2026-01-01', periodEnd: '2026-03-31' });
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
@@ -157,13 +141,9 @@ describe('POST /api/vat/prepare', () => {
   });
 
   test('idempotent — calling twice returns same vatReturnId', async () => {
-    const res1 = await request(app)
-      .post('/api/vat/prepare')
-      .send({ merchantId: MERCHANT_ID, periodKey: '26AA', periodStart: '2026-01-01', periodEnd: '2026-03-31' });
-    const res2 = await request(app)
-      .post('/api/vat/prepare')
-      .send({ merchantId: MERCHANT_ID, periodKey: '26AA', periodStart: '2026-01-01', periodEnd: '2026-03-31' });
-
+    const body = { merchantId: MERCHANT_ID, periodKey: '26AA', periodStart: '2026-01-01', periodEnd: '2026-03-31' };
+    const res1 = await request(app).post('/api/vat/prepare').send(body);
+    const res2 = await request(app).post('/api/vat/prepare').send(body);
     expect(res1.body.vatReturnId).toBe(res2.body.vatReturnId);
   });
 });
