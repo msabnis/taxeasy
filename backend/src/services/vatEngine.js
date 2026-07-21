@@ -22,7 +22,7 @@
 'use strict';
 
 const { Op }         = require('sequelize');
-const { Transaction, VatReturn, Merchant } = require('../models');
+const { Transaction, VatReturn } = require('../models');
 const logger         = require('../utils/logger');
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -30,9 +30,6 @@ const logger         = require('../utils/logger');
 const TRANSACTION_TYPES_SALES     = ['sale'];
 const TRANSACTION_TYPES_PURCHASES = ['purchase', 'fee'];
 const TRANSACTION_TYPES_REFUNDS   = ['refund'];
-
-// VAT-able rate types (exempt transactions are excluded from VAT boxes)
-const VAT_ABLE_RATES = ['standard', 'reduced', 'zero'];
 
 // ── Core 9-Box Calculation ────────────────────────────────────────────────────
 
@@ -77,7 +74,6 @@ function calculate9BoxReturn(transactions, periodStart, periodEnd) {
     const type  = t.type;
 
     if (TRANSACTION_TYPES_SALES.includes(type)) {
-      // Sales: add to Box 1 (VAT) and Box 6 (net value)
       box1Pence += vat;
       box6Pence += net;
       breakdown.sales.count++;
@@ -87,8 +83,6 @@ function calculate9BoxReturn(transactions, periodStart, periodEnd) {
       if (breakdown.byRate[rate]) breakdown.byRate[rate].sales += net;
 
     } else if (TRANSACTION_TYPES_REFUNDS.includes(type)) {
-      // Refunds: reverse the VAT on sales (reduce Box 1) and reduce Box 6
-      // Refund amounts are stored as positive numbers representing money returned
       box1Pence -= vat;
       box6Pence -= net;
       breakdown.refunds.count++;
@@ -98,11 +92,9 @@ function calculate9BoxReturn(transactions, periodStart, periodEnd) {
 
     } else if (TRANSACTION_TYPES_PURCHASES.includes(type)) {
       if (rate === 'exempt') {
-        // Exempt purchases: count for records but no VAT reclaim
         breakdown.exempt.count++;
         breakdown.exempt.grossPence += gross;
       } else {
-        // VAT-able purchases: add to Box 4 (reclaim) and Box 7 (net value)
         box4Pence += vat;
         box7Pence += net;
         breakdown.purchases.count++;
@@ -114,29 +106,24 @@ function calculate9BoxReturn(transactions, periodStart, periodEnd) {
     }
   }
 
-  // Ensure no negative values from refunds exceeding sales (edge case)
+  // Ensure no negative values from refunds exceeding sales
   box1Pence = Math.max(0, box1Pence);
   box6Pence = Math.max(0, box6Pence);
 
-  // Box 2: EC acquisitions — always 0 post-Brexit
   const box2Pence = 0;
-
-  // Box 3: Total VAT due = Box 1 + Box 2
   const box3Pence = box1Pence + box2Pence;
-
-  // Box 5: Net VAT payable (positive = owe HMRC, negative = reclaim)
   const box5Pence = box3Pence - box4Pence;
-
-  // Boxes 8 & 9: EC supplies/acquisitions — always 0 post-Brexit
   const box8Pence = 0;
   const box9Pence = 0;
+
+  // isPayable: true when merchant owes HMRC (box5 >= 0)
+  // When all boxes are zero (no transactions), net is 0 — not payable
+  const isPayable = box5Pence > 0;
 
   return {
     periodStart,
     periodEnd,
     transactionCount: inPeriod.length,
-
-    // 9-box values in PENCE (for database storage)
     box1: box1Pence,
     box2: box2Pence,
     box3: box3Pence,
@@ -146,12 +133,8 @@ function calculate9BoxReturn(transactions, periodStart, periodEnd) {
     box7: box7Pence,
     box8: box8Pence,
     box9: box9Pence,
-
-    // Derived fields
-    isPayable: box5Pence >= 0,  // true = owe HMRC, false = reclaiming
-    netVatPence: box5Pence,     // signed: positive = payable, negative = reclaimable
-
-    // Breakdown for UI display
+    isPayable,
+    netVatPence: box5Pence,
     breakdown,
   };
 }
@@ -174,10 +157,10 @@ function formatForHmrc(nineBox, periodKey) {
     totalVatDue:                  parseFloat((nineBox.box3 / 100).toFixed(2)),
     vatReclaimedCurrPeriod:       parseFloat((nineBox.box4 / 100).toFixed(2)),
     netVatDue:                    parseFloat((nineBox.box5 / 100).toFixed(2)),
-    totalValueSalesExVAT:         Math.floor(nineBox.box6 / 100),  // Whole pounds
-    totalValuePurchasesExVAT:     Math.floor(nineBox.box7 / 100),  // Whole pounds
-    totalValueGoodsSuppliedExVAT: Math.floor(nineBox.box8 / 100),  // Whole pounds
-    totalAcquisitionsExVAT:       Math.floor(nineBox.box9 / 100),  // Whole pounds
+    totalValueSalesExVAT:         Math.floor(nineBox.box6 / 100),
+    totalValuePurchasesExVAT:     Math.floor(nineBox.box7 / 100),
+    totalValueGoodsSuppliedExVAT: Math.floor(nineBox.box8 / 100),
+    totalAcquisitionsExVAT:       Math.floor(nineBox.box9 / 100),
     finalised: true,
   };
 }
@@ -220,11 +203,6 @@ function formatForDisplay(nineBox) {
 
 /**
  * Fetch transactions for a merchant in a date range and calculate 9-box return.
- *
- * @param {string} merchantId   - Merchant UUID
- * @param {string} periodStart  - 'YYYY-MM-DD'
- * @param {string} periodEnd    - 'YYYY-MM-DD'
- * @returns {Object} 9-box result
  */
 async function calculateForMerchant(merchantId, periodStart, periodEnd) {
   logger.info(`VAT Engine: calculating for merchant ${merchantId}, period ${periodStart} to ${periodEnd}`);
@@ -239,30 +217,17 @@ async function calculateForMerchant(merchantId, periodStart, periodEnd) {
   });
 
   logger.info(`VAT Engine: found ${transactions.length} transactions`);
-
   const result = calculate9BoxReturn(transactions, periodStart, periodEnd);
-
   logger.info(`VAT Engine: box1=${result.box1}p, box4=${result.box4}p, box5=${result.box5}p, isPayable=${result.isPayable}`);
-
   return result;
 }
 
 /**
  * Prepare a VAT return record in the database (status: 'prepared').
- * Creates or updates the VatReturn record for the given period.
- *
- * @param {string} merchantId  - Merchant UUID
- * @param {string} periodKey   - HMRC period key, e.g. "24AA"
- * @param {string} periodStart - 'YYYY-MM-DD'
- * @param {string} periodEnd   - 'YYYY-MM-DD'
- * @param {string} dueDate     - 'YYYY-MM-DD' (period end + 1 month + 7 days)
- * @returns {Object} { vatReturn, nineBox, hmrcPayload, displayData }
  */
 async function prepareVatReturn(merchantId, periodKey, periodStart, periodEnd, dueDate) {
-  // Calculate 9-box from transactions
   const nineBox = await calculateForMerchant(merchantId, periodStart, periodEnd);
 
-  // Upsert VatReturn record
   const [vatReturn, created] = await VatReturn.findOrCreate({
     where: { merchantId, periodKey },
     defaults: {
@@ -276,7 +241,6 @@ async function prepareVatReturn(merchantId, periodKey, periodStart, periodEnd, d
   });
 
   if (!created) {
-    // Update existing draft/prepared return
     await vatReturn.update({
       periodStart,
       periodEnd,
@@ -291,7 +255,6 @@ async function prepareVatReturn(merchantId, periodKey, periodStart, periodEnd, d
   const displayData  = formatForDisplay(nineBox);
 
   logger.info(`VAT Engine: ${created ? 'created' : 'updated'} VatReturn ${vatReturn.id} for period ${periodKey}`);
-
   return { vatReturn, nineBox, hmrcPayload, displayData };
 }
 
@@ -299,34 +262,40 @@ async function prepareVatReturn(merchantId, periodKey, periodStart, periodEnd, d
  * Calculate the HMRC filing deadline for a VAT period.
  * Rule: 1 calendar month + 7 days after period end.
  *
+ * Uses UTC date arithmetic to avoid month-overflow and DST issues.
+ * Example: 2026-03-31 + 1 month = 2026-04-30 (not May 1) + 7 days = 2026-05-07
+ *
  * @param {string} periodEnd - 'YYYY-MM-DD'
  * @returns {string} dueDate 'YYYY-MM-DD'
  */
 function calculateDueDate(periodEnd) {
-  const d = new Date(periodEnd);
-  d.setMonth(d.getMonth() + 1);
-  d.setDate(d.getDate() + 7);
-  return d.toISOString().split('T')[0];
-}
+  const [year, month, day] = periodEnd.split('-').map(Number);
 
-/**
- * Determine the VAT period dates from an HMRC obligation object.
- * @param {Object} obligation - HMRC obligation { start, end, periodKey, due }
- * @returns {{ periodStart, periodEnd, periodKey, dueDate }}
- */
-function parsePeriodFromObligation(obligation) {
-  return {
-    periodStart: obligation.start,
-    periodEnd:   obligation.end,
-    periodKey:   obligation.periodKey,
-    dueDate:     obligation.due || calculateDueDate(obligation.end),
-  };
+  // Add 1 calendar month using UTC to avoid DST shifts
+  // Use day=0 of the month after next to get last day of target month,
+  // then cap to avoid overflow (e.g. Jan 31 + 1 month = Feb 28, not Mar 3)
+  const targetMonth = month; // month is 1-based; adding 1 month means month index stays same in 0-based
+  const targetYear  = month === 12 ? year + 1 : year;
+  const targetMonthIndex = month === 12 ? 0 : month; // 0-based month for Date
+
+  // Get last day of target month to cap overflow
+  const lastDayOfTargetMonth = new Date(Date.UTC(targetYear, targetMonthIndex + 1, 0)).getUTCDate();
+  const cappedDay = Math.min(day, lastDayOfTargetMonth);
+
+  // Build the date 1 month after period end (capped)
+  const afterOneMonth = new Date(Date.UTC(targetYear, targetMonthIndex, cappedDay));
+
+  // Add 7 days
+  afterOneMonth.setUTCDate(afterOneMonth.getUTCDate() + 7);
+
+  const y = afterOneMonth.getUTCFullYear();
+  const m = String(afterOneMonth.getUTCMonth() + 1).padStart(2, '0');
+  const d2 = String(afterOneMonth.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${d2}`;
 }
 
 /**
  * Get a summary of all VAT returns for a merchant.
- * @param {string} merchantId
- * @returns {Array} VatReturn records ordered by period
  */
 async function getVatReturnHistory(merchantId) {
   return VatReturn.findAll({
@@ -342,39 +311,35 @@ async function getVatReturnHistory(merchantId) {
 
 /**
  * Check if a VAT return is overdue.
- * @param {string} dueDate - 'YYYY-MM-DD'
- * @returns {boolean}
  */
 function isOverdue(dueDate) {
   return new Date() > new Date(dueDate);
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+function parsePeriodFromObligation(obligation) {
+  return {
+    periodStart: obligation.start,
+    periodEnd:   obligation.end,
+    periodKey:   obligation.periodKey,
+    dueDate:     obligation.due || calculateDueDate(obligation.end),
+  };
+}
 
 function pick9Box(nineBox) {
   return {
-    box1: nineBox.box1,
-    box2: nineBox.box2,
-    box3: nineBox.box3,
-    box4: nineBox.box4,
-    box5: nineBox.box5,
-    box6: nineBox.box6,
-    box7: nineBox.box7,
-    box8: nineBox.box8,
-    box9: nineBox.box9,
+    box1: nineBox.box1, box2: nineBox.box2, box3: nineBox.box3,
+    box4: nineBox.box4, box5: nineBox.box5, box6: nineBox.box6,
+    box7: nineBox.box7, box8: nineBox.box8, box9: nineBox.box9,
   };
 }
 
 module.exports = {
-  // Core calculation (pure, no DB)
   calculate9BoxReturn,
   formatForHmrc,
   formatForDisplay,
   calculateDueDate,
   parsePeriodFromObligation,
   isOverdue,
-
-  // DB-integrated
   calculateForMerchant,
   prepareVatReturn,
   getVatReturnHistory,
