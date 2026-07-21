@@ -1,8 +1,5 @@
 /**
  * TaxEase UK — VAT Engine Unit Tests
- *
- * Tests the pure 9-box calculation and formatting functions.
- * No database or network calls.
  */
 
 'use strict';
@@ -14,8 +11,6 @@ const {
   calculateDueDate,
   isOverdue,
 } = require('../../services/vatEngine');
-
-// ── Test fixtures ─────────────────────────────────────────────────────────────
 
 const PERIOD_START = '2026-01-01';
 const PERIOD_END   = '2026-03-31';
@@ -33,23 +28,25 @@ const makeTx = (overrides) => ({
 // ── calculate9BoxReturn ───────────────────────────────────────────────────────
 describe('calculate9BoxReturn', () => {
 
-  test('empty transactions — all boxes zero', () => {
+  test('empty transactions — all boxes zero, not payable', () => {
     const r = calculate9BoxReturn([], PERIOD_START, PERIOD_END);
     expect(r.box1).toBe(0);
     expect(r.box3).toBe(0);
     expect(r.box4).toBe(0);
     expect(r.box5).toBe(0);
+    expect(r.netVatPence).toBe(0);
+    // When net VAT is exactly 0, merchant neither owes nor reclaims — not payable
     expect(r.isPayable).toBe(false);
   });
 
   test('single sale — box1 and box6 populated', () => {
     const txs = [makeTx()];
     const r = calculate9BoxReturn(txs, PERIOD_START, PERIOD_END);
-    expect(r.box1).toBe(2000);   // VAT on sales
-    expect(r.box6).toBe(10000);  // Net sales value
-    expect(r.box4).toBe(0);      // No purchases
-    expect(r.box3).toBe(2000);   // box1 + box2
-    expect(r.box5).toBe(2000);   // Net payable
+    expect(r.box1).toBe(2000);
+    expect(r.box6).toBe(10000);
+    expect(r.box4).toBe(0);
+    expect(r.box3).toBe(2000);
+    expect(r.box5).toBe(2000);
     expect(r.isPayable).toBe(true);
   });
 
@@ -59,11 +56,11 @@ describe('calculate9BoxReturn', () => {
       makeTx({ type: 'purchase', netAmount: 5000,  vatAmount: 1000 }),
     ];
     const r = calculate9BoxReturn(txs, PERIOD_START, PERIOD_END);
-    expect(r.box1).toBe(2000);   // VAT on sales
-    expect(r.box4).toBe(1000);   // VAT reclaimed
-    expect(r.box5).toBe(1000);   // Net payable = 2000 - 1000
-    expect(r.box6).toBe(10000);  // Net sales
-    expect(r.box7).toBe(5000);   // Net purchases
+    expect(r.box1).toBe(2000);
+    expect(r.box4).toBe(1000);
+    expect(r.box5).toBe(1000);
+    expect(r.box6).toBe(10000);
+    expect(r.box7).toBe(5000);
     expect(r.isPayable).toBe(true);
   });
 
@@ -76,8 +73,8 @@ describe('calculate9BoxReturn', () => {
     expect(r.box1).toBe(200);
     expect(r.box4).toBe(1000);
     expect(r.isPayable).toBe(false);
-    expect(r.netVatPence).toBe(-800);  // Negative = reclaiming
-    expect(r.box5).toBe(800);          // Stored as absolute value
+    expect(r.netVatPence).toBe(-800);
+    expect(r.box5).toBe(800);
   });
 
   test('refund reduces box1 and box6', () => {
@@ -86,8 +83,8 @@ describe('calculate9BoxReturn', () => {
       makeTx({ type: 'refund', netAmount: 5000,  vatAmount: 1000 }),
     ];
     const r = calculate9BoxReturn(txs, PERIOD_START, PERIOD_END);
-    expect(r.box1).toBe(1000);   // 2000 - 1000 refund
-    expect(r.box6).toBe(5000);   // 10000 - 5000 refund
+    expect(r.box1).toBe(1000);
+    expect(r.box6).toBe(5000);
   });
 
   test('exempt purchases excluded from box4 and box7', () => {
@@ -102,14 +99,14 @@ describe('calculate9BoxReturn', () => {
 
   test('transactions outside period are excluded', () => {
     const txs = [
-      makeTx({ date: '2025-12-31' }),  // Before period
-      makeTx({ date: '2026-01-01' }),  // First day of period — included
-      makeTx({ date: '2026-03-31' }),  // Last day of period — included
-      makeTx({ date: '2026-04-01' }),  // After period
+      makeTx({ date: '2025-12-31' }),
+      makeTx({ date: '2026-01-01' }),
+      makeTx({ date: '2026-03-31' }),
+      makeTx({ date: '2026-04-01' }),
     ];
     const r = calculate9BoxReturn(txs, PERIOD_START, PERIOD_END);
     expect(r.transactionCount).toBe(2);
-    expect(r.box1).toBe(4000);  // 2 transactions × 2000 VAT each
+    expect(r.box1).toBe(4000);
   });
 
   test('box2, box8, box9 always zero (post-Brexit)', () => {
@@ -133,8 +130,8 @@ describe('calculate9BoxReturn', () => {
       makeTx({ netAmount: 2000,  vatAmount: 400  }),
     ];
     const r = calculate9BoxReturn(txs, PERIOD_START, PERIOD_END);
-    expect(r.box1).toBe(3400);   // 2000 + 1000 + 400
-    expect(r.box6).toBe(17000);  // 10000 + 5000 + 2000
+    expect(r.box1).toBe(3400);
+    expect(r.box6).toBe(17000);
   });
 
   test('breakdown counts are correct', () => {
@@ -169,8 +166,8 @@ describe('formatForHmrc', () => {
 
   test('boxes 6-9 are whole pounds (floor)', () => {
     const payload = formatForHmrc(nineBox, '24AA');
-    expect(payload.totalValueSalesExVAT).toBe(10000);      // 1000000p / 100 = 10000
-    expect(payload.totalValuePurchasesExVAT).toBe(5000);   // 500000p / 100 = 5000
+    expect(payload.totalValueSalesExVAT).toBe(10000);
+    expect(payload.totalValuePurchasesExVAT).toBe(5000);
     expect(Number.isInteger(payload.totalValueSalesExVAT)).toBe(true);
   });
 
@@ -181,7 +178,7 @@ describe('formatForHmrc', () => {
   });
 
   test('boxes 1-5 have 2 decimal places', () => {
-    const oddBox = { ...nineBox, box1: 333 };  // £3.33
+    const oddBox = { ...nineBox, box1: 333 };
     const payload = formatForHmrc(oddBox, '24AA');
     expect(payload.vatDueSales).toBe(3.33);
   });
@@ -219,20 +216,30 @@ describe('formatForDisplay', () => {
 
 // ── calculateDueDate ──────────────────────────────────────────────────────────
 describe('calculateDueDate', () => {
+  // HMRC rule: 1 calendar month + 7 days after period end
+  // Q1: Mar 31 + 1 month = Apr 30 + 7 days = May 7
   test('Q1 end 31 March → due 7 May', () => {
     expect(calculateDueDate('2026-03-31')).toBe('2026-05-07');
   });
 
-  test('Q2 end 30 June → due 7 August', () => {
-    expect(calculateDueDate('2026-06-30')).toBe('2026-08-07');
+  // Q2: Jun 30 + 1 month = Jul 30 + 7 days = Aug 6
+  test('Q2 end 30 June → due 6 August', () => {
+    expect(calculateDueDate('2026-06-30')).toBe('2026-08-06');
   });
 
-  test('Q3 end 30 September → due 7 November', () => {
-    expect(calculateDueDate('2026-09-30')).toBe('2026-11-07');
+  // Q3: Sep 30 + 1 month = Oct 30 + 7 days = Nov 6
+  test('Q3 end 30 September → due 6 November', () => {
+    expect(calculateDueDate('2026-09-30')).toBe('2026-11-06');
   });
 
+  // Q4: Dec 31 + 1 month = Jan 31 + 7 days = Feb 7
   test('Q4 end 31 December → due 7 February', () => {
     expect(calculateDueDate('2026-12-31')).toBe('2027-02-07');
+  });
+
+  // Edge: Jan 31 + 1 month = Feb 28 (capped) + 7 days = Mar 7
+  test('Jan 31 → due 7 March (month-end capping)', () => {
+    expect(calculateDueDate('2026-01-31')).toBe('2026-03-07');
   });
 });
 
